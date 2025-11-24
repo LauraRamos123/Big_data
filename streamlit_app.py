@@ -1,11 +1,54 @@
 import streamlit as st
 from pymongo import MongoClient
 from neo4j import GraphDatabase
-from pyvis.network import Network
+import networkx as nx
+import matplotlib.pyplot as plt
 import streamlit.components.v1 as components
 
+# ================================
+# 🎨 ESTILOS PERSONALIZADOS
+# ================================
+st.markdown("""
+<style>
+
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif;
+}
+
+/* Reducir ancho del sidebar */
+[data-testid="stSidebar"] {
+    width: 260px !important;
+}
+
+/* Contenedor para gráficos */
+.graph-box {
+    background-color: #111827;
+    padding: 20px;
+    border-radius: 20px;
+    margin-top: 20px;
+    margin-bottom: 25px;
+}
+
+/* Separador */
+hr {
+    border: 0;
+    height: 1px;
+    background: #374151;
+    margin-top: 20px;
+    margin-bottom: 20px;
+}
+
+/* Expander estilizado */
+details > summary {
+    font-size: 18px;
+    font-weight: 600;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
 # =============================================
-# 1. CONEXIÓN A MONGODB (TAL CUAL COMO PEDISTE)
+# 1. CONEXIÓN A MONGODB
 # =============================================
 MONGO_URI = "mongodb+srv://superuser:ynmkEGkQ4JPPs9sI@cluster0.qfgghrp.mongodb.net/?appName=Cluster0"
 DB_NAME = "Proyecto_Final"
@@ -39,9 +82,6 @@ def obtener_similitudes(nombre_prov):
         result = session.run(query, nombre_prov=nombre_prov)
         return list(result)
 
-# =============================================
-# FUNCIÓN PARA UMBRAL
-# =============================================
 def obtener_similitudes_filtradas(nombre_prov, umbral):
     query = """
     MATCH (n:Providencia {nombre: $nombre_prov})-[r:SIMILAR]-(m:Providencia)
@@ -53,9 +93,9 @@ def obtener_similitudes_filtradas(nombre_prov, umbral):
         result = session.run(query, nombre_prov=nombre_prov, umbral=umbral)
         return list(result)
 
-# ==========================================================
-# 🔥 NUEVO: CONSULTAR GRAFO DESDE LISTA DE NOMBRES (Mongo→Neo4j)
-# ==========================================================
+# =============================================
+# GRAFO FILTRADO DESDE LISTA
+# =============================================
 def obtener_grafo_desde_lista(resultados_mongo):
     lista = [n["providencia"] for n in resultados_mongo if "providencia" in n]
 
@@ -74,25 +114,58 @@ def obtener_grafo_desde_lista(resultados_mongo):
         return list(result)
 
 # =============================================
-# FUNCIÓN PARA CREAR GRAFO
+# 🎨 DIBUJAR GRAFO
 # =============================================
-def crear_grafo(similitudes, nodo_central=None):
-    net = Network(height="500px", width="100%", bgcolor="#FFFFFF", font_color="black")
+def crear_grafo(sims, highlight=None):
+    
+    G = nx.Graph()
 
-    if nodo_central:
-        net.add_node(nodo_central, label=nodo_central, color="red", size=25)
+    for r in sims:
+        origen = r["origen"]
+        destino = r["destino"]
+        score = r["similitud"]
+        G.add_edge(origen, destino, weight=score)
 
-    for registro in similitudes:
-        origen = registro["origen"]
-        destino = registro["destino"]
-        score = registro["similitud"]
+    pos = nx.spring_layout(G, seed=42, k=1.0)
 
-        net.add_node(origen, label=origen, color="blue")
-        net.add_node(destino, label=destino, color="blue")
-        net.add_edge(origen, destino, title=f"Similitud: {score}", value=score)
+    plt.figure(figsize=(13, 13))
 
-    net.repulsion(node_distance=200, spring_length=200)
-    return net
+    node_size = 7000    
+    font_size = 18
+
+    node_colors = []
+    for n in G.nodes():
+        if highlight and n == highlight:
+            node_colors.append("#FF4040")
+        else:
+            node_colors.append("#4A90E2")
+
+    edges = G.edges(data=True)
+    edge_colors = []
+    edge_widths = []
+
+    for u, v, data in edges:
+        score = data["weight"]
+
+        if score >= 0.25:
+            color = "#1C5D99"; width = 3.5
+        elif score >= 0.15:
+            color = "#3A7CA5"; width = 2.5
+        elif score >= 0.05:
+            color = "#95C8D8"; width = 1.8
+        else:
+            color = "#CCCCCC"; width = 1
+
+        edge_colors.append(color)
+        edge_widths.append(width)
+
+    nx.draw_networkx_nodes(G, pos, node_size=node_size, node_color=node_colors, alpha=0.95)
+    nx.draw_networkx_edges(G, pos, width=edge_widths, edge_color=edge_colors, alpha=0.8)
+    nx.draw_networkx_labels(G, pos, font_size=font_size, font_color="black", font_weight="bold")
+
+    plt.axis("off")
+    plt.tight_layout()
+    return plt
 
 # =============================================
 # TRUNCAR TEXTO
@@ -106,22 +179,23 @@ def truncar_texto(texto, n_palabras=300):
 # =============================================
 # TÍTULO
 # =============================================
-st.title("Buscador de Providencias en MongoDB + Grafo Neo4j")
+st.markdown("""
+<h1 style="text-align:center;">🔍 Buscador de Providencias</h1>
+<h3 style="text-align:center; color:#9CA3AF;">MongoDB + Neo4j + Similitudes</h3>
+""", unsafe_allow_html=True)
 
 # =============================================
 # SIDEBAR
 # =============================================
 st.sidebar.header("Filtros de búsqueda")
 
-input_providencia = st.sidebar.text_input("Número de providencia")
-input_tipo = st.sidebar.text_input("Tipo de providencia")
-input_keywords = st.sidebar.text_input("Palabras clave (separadas por coma)")
+input_providencia = st.sidebar.text_input("Número de providencia", placeholder="Ej: T-123-23")
+input_tipo = st.sidebar.text_input("Tipo de providencia", placeholder="Ej: Tutela")
+input_keywords = st.sidebar.text_input("Palabras clave", placeholder="Ej: ministerio")
 
 buscar = st.sidebar.button("Buscar")
 
-# ---------------------------------------------
 # GRAFO MANUAL
-# ---------------------------------------------
 st.sidebar.header("Grafo por similitud")
 grafo_nombre = st.sidebar.text_input("Providencia para grafo")
 grafo_umbral = st.sidebar.slider("Similitud mínima", 0.0, 1.0, 0.5, 0.01)
@@ -134,13 +208,13 @@ if boton_grafo and grafo_nombre:
     if len(sims) == 0:
         st.info("No hay relaciones.")
     else:
-        net = crear_grafo(sims, grafo_nombre)
-        net.save_graph("grafo.html")
-        HtmlFile = open("grafo.html", "r", encoding="utf-8")
-        components.html(HtmlFile.read(), height=550)
+        st.markdown("<div class='graph-box'>", unsafe_allow_html=True)
+        fig = crear_grafo(sims, highlight=grafo_nombre)
+        st.pyplot(fig)
+        st.markdown("</div>", unsafe_allow_html=True)
 
 # =============================================
-# QUERIES BASE
+# CONSULTAS MONGO
 # =============================================
 def consulta_por_providencia(nombre):
     return {"providencia": nombre} if nombre else {}
@@ -162,7 +236,7 @@ def armar_query(providencia, tipo, keywords):
     return query
 
 # =============================================
-# EJECUTAR CONSULTA MONGO + INTEGRAR GRAFO
+# EJECUTAR CONSULTA
 # =============================================
 if buscar:
     query = armar_query(input_providencia, input_tipo, input_keywords)
@@ -175,21 +249,22 @@ if buscar:
     if len(resultados) == 0:
         st.info("No se encontraron documentos.")
 
+    # GRAFO FILTRADO
     if input_tipo or input_keywords:
-        st.subheader("Grafo de las providencias filtradas (Neo4j)")
+        st.markdown("<hr>", unsafe_allow_html=True)
+        st.subheader("Grafo de providencias filtradas (NetworkX)")
+
         sims = obtener_grafo_desde_lista(resultados)
 
         if len(sims) == 0:
-            st.info("No hay relaciones de similitud entre los resultados.")
+            st.info("No hay relaciones de similitud.")
         else:
-            net = crear_grafo(sims)
-            net.save_graph("grafo.html")
-            HtmlFile = open("grafo.html", "r", encoding="utf-8")
-            components.html(HtmlFile.read(), height=550)
+            st.markdown("<div class='graph-box'>", unsafe_allow_html=True)
+            fig = crear_grafo(sims)
+            st.pyplot(fig)
+            st.markdown("</div>", unsafe_allow_html=True)
 
-    # ==========================================
-    # MOSTRAR LOS DOCUMENTOS
-    # ==========================================
+    # MOSTRAR DOCUMENTOS
     for doc in resultados:
         prov = doc.get("providencia")
 
@@ -199,27 +274,13 @@ if buscar:
             doc_mostrar["Texto"] = truncar_texto(doc.get("Texto", ""), 300)
             st.write(doc_mostrar)
 
-            # Grafo individual por providencia
-            if prov:
-                st.subheader("Grafo de similitudes (Neo4j)")
+            sims = obtener_similitudes(prov)
 
-                sims = obtener_similitudes(prov)
-
-                if len(sims) == 0:
-                    st.info("Esta providencia no tiene relaciones.")
-                else:
-                    net = crear_grafo(sims, prov)
-                    net.save_graph("grafo.html")
-                    HtmlFile = open("grafo.html", "r", encoding="utf-8")
-                    components.html(HtmlFile.read(), height=550)
-
-                    # ============================
-                    # 🔥 LISTA DE SIMILITUDES (NUEVO)
-                    # ============================
-                    st.subheader("Listado de similitudes")
-
-                    for r in sims:
-                        origen = r["origen"]
-                        destino = r["destino"]
-                        score = r["similitud"]
-                        st.write(f"- **{destino}** → similitud: **{score}**")
+            if len(sims) == 0:
+                st.info("Esta providencia no tiene relaciones.")
+            else:
+                st.subheader("Listado de similitudes")
+                for r in sims:
+                    destino = r["destino"]
+                    score = r["similitud"]
+                    st.write(f"- **{destino}** → similitud: **{score}**")

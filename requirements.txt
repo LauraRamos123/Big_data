@@ -1,2 +1,6 @@
-streamlit
+neo4j
 pymongo
+networkx
+matplotlib
+streamlit
+pyvis
